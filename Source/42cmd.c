@@ -21,7 +21,7 @@
 */
 
 long FswCmdInterpreter(char CmdLine[512], double *CmdTime);
-#ifdef _USE_GUI_
+#ifdef _ENABLE_GUI_
 long GuiCmdInterpreter(char CmdLine[512], double *CmdTime);
 #endif
 
@@ -32,21 +32,28 @@ long SimCmdInterpreter(char CmdLine[512],double *CmdTime)
       long NewCmdProcessed = FALSE;
       long Isc,Ig,Idof;
       double Val;
-      long Iorb;
+      long Iorb,i;
       char DvFrame;
       double Vec[3], DVN[3];
       struct OrbitType *O;
+      struct SCType *S;
 
-      if (sscanf(CmdLine,"%lf SC[%ld].RotDOF %s",
+      if (sscanf(CmdLine,"%lf SC[%ld].DynMethod %s",
          CmdTime,&Isc,response) == 3) {
          NewCmdProcessed = TRUE;
-         SC[Isc].RotDOF = DecodeString(response);
+         SC[Isc].DynMethod = DecodeString(response);
       }
 
       if (sscanf(CmdLine,"%lf DTSIM = %lf",
          CmdTime,&Val) == 2) {
          NewCmdProcessed = TRUE;
          DTSIM = Val;
+      }
+
+      if (sscanf(CmdLine,"%lf DTOUT = %lf",
+         CmdTime,&Val) == 2) {
+         NewCmdProcessed = TRUE;
+         DTOUT = Val;
       }
 
       if (sscanf(CmdLine,"%lf SC[%ld].G[%ld].RotLocked[%ld] %s",
@@ -80,13 +87,67 @@ long SimCmdInterpreter(char CmdLine[512],double *CmdTime)
             printf("Bogus DvFrame %c in SimCmdInterpreter\n",DvFrame);
             exit(1);
          }
-         RV2Eph(AbsTime,O->mu,O->PosN,O->VelN,
+         RV2Eph(DynTime,O->mu,O->PosN,O->VelN,
                 &O->SMA,&O->ecc,&O->inc,
                 &O->RAAN,&O->ArgP,&O->anom,
                 &O->tp,&O->SLR,&O->alpha,&O->rmin,
                 &O->MeanMotion,&O->Period);
       }
-
+      
+      if (sscanf(CmdLine,"%lf SC[%ld].LoopGain = %lf",CmdTime,&Isc,&Val) == 3) {
+         NewCmdProcessed = TRUE;
+         SC[Isc].LoopGain = Val;
+      }
+      
+      if (sscanf(CmdLine,"%lf SC[%ld].LoopDelay = %lf",CmdTime,&Isc,&Val) == 3) {
+         NewCmdProcessed = TRUE;
+         S = &SC[Isc];
+         S->LoopDelay = Val;
+         for(i=0;i<3;i++) {
+            if (S->IdealAct[i].FrcDelay == NULL) {
+               S->IdealAct[i].FrcDelay = CreateDelay(S->LoopDelay,DTSIM);
+            }
+            else {
+               S->IdealAct[i].FrcDelay = ResizeDelay(S->IdealAct[i].FrcDelay,S->LoopDelay,DTSIM);
+            }
+            if (S->IdealAct[i].TrqDelay == NULL) {
+               S->IdealAct[i].TrqDelay = CreateDelay(S->LoopDelay,DTSIM);
+            }
+            else {
+               S->IdealAct[i].TrqDelay = ResizeDelay(S->IdealAct[i].TrqDelay,S->LoopDelay,DTSIM);
+            }
+         }
+         for(i=0;i<S->Nw;i++) {
+            if (S->Whl[i].Delay == NULL) {
+               S->Whl[i].Delay = CreateDelay(S->LoopDelay,DTSIM);
+            }
+            else {
+               S->Whl[i].Delay = ResizeDelay(S->Whl[i].Delay,S->LoopDelay,DTSIM);
+            }
+         }
+         for(i=0;i<S->Nmtb;i++) {
+            if (S->MTB[i].Delay == NULL) {
+               S->MTB[i].Delay = CreateDelay(S->LoopDelay,DTSIM);
+            }
+            else {
+               S->MTB[i].Delay = ResizeDelay(S->MTB[i].Delay,S->LoopDelay,DTSIM);
+            }
+         }
+          for(i=0;i<S->Nthr;i++) {
+            if (S->Thr[i].Delay == NULL) {
+               S->Thr[i].Delay = CreateDelay(S->LoopDelay,DTSIM);
+            }
+            else {
+               S->Thr[i].Delay = ResizeDelay(S->Thr[i].Delay,S->LoopDelay,DTSIM);
+            }
+         }
+      }
+     
+      if (sscanf(CmdLine,"%lf SC[%ld].GainAndDelayActive = %s",CmdTime,&Isc,response) == 3) {
+         NewCmdProcessed = TRUE;
+         SC[Isc].GainAndDelayActive = DecodeString(response);
+      }
+      
       return(NewCmdProcessed);
 }
 /**********************************************************************/
@@ -117,7 +178,7 @@ void CmdInterpreter(void)
          }
       }
 
-      while (CmdTime <= SimTime && CmdFileActive) {
+      while (CmdTime <= SimTime+0.5*DTSIM && CmdFileActive) {
          NewCmdProcessed = FALSE;
          /* Look for known command patterns */
 
@@ -126,6 +187,7 @@ void CmdInterpreter(void)
              !strncmp(CmdLine,"//",2) ||
              !strncmp(CmdLine,"#",1) ||
              !strncmp(CmdLine,"\n",1) ||
+             !strncmp(CmdLine,"\r",1) ||
              !strncmp(CmdLine,"%",1)) NewCmdProcessed = TRUE;
 
          /* Sim Commands */
@@ -133,7 +195,7 @@ void CmdInterpreter(void)
             NewCmdProcessed = TRUE;
 
          /* Visualization Commands */
-         #ifdef _USE_GUI_
+         #ifdef _ENABLE_GUI_
             else if (GuiCmdInterpreter(CmdLine,&CmdTime))
                NewCmdProcessed = TRUE;
          #endif

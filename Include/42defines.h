@@ -196,14 +196,17 @@
 #define LAGDOF_COWELL 1
 #define LAGDOF_SPLINE 2
 
-#define ROTDOF_STEADY 0
-#define ROTDOF_KIN_JOINT 1
-#define ROTDOF_DYN_JOINT 2
+#define DYN_GAUSS_ELIM 0
+#define DYN_ORDER_N 1
 
 #define ORBDOF_FIXED 0
 #define ORBDOF_EULER_HILL 1
 #define ORBDOF_ENCKE 2
 #define ORBDOF_COWELL 3
+
+#define EPH_MEAN 0
+#define EPH_DE430 1
+#define EPH_DE440 2
 
 #define REFPT_CM 0
 #define REFPT_JOINT 1
@@ -220,6 +223,7 @@
 #define FAST_TIME 0
 #define REAL_TIME 1
 #define EXTERNAL_TIME 2
+#define NOS3_TIME 3
 
 /* World Types */
 #define SUN 0
@@ -237,6 +241,9 @@
 #define THREE_AXIS_FSW 5
 #define ISS_FSW 6
 #define CMG_FSW 7
+#define THR_FSW 8
+#define CFS_FSW 9
+#define RBT_FSW 10
 
 /* Command Types */
 #define CMD_DIRECTION 0
@@ -253,40 +260,53 @@
 #define VIEW_TOP 7
 
 /* Solar Activity Modes */
-#define TWOSIGMA_KP 0
-#define NOMINAL 1
-#define USER_DEFINED 2
-
-/* Mnemonics for InterProcess Comm */
-#define MNEM_TIME 0
-#define MNEM_SC 1
-#define MNEM_POS 2
-#define MNEM_VEL 3
-#define MNEM_WBN 4
-#define MNEM_QBN 5
-#define MNEM_SVB 6
-#define MNEM_BVB 7
-#define MNEM_HVB 8
-#define MNEM_JOINT 9
-#define MNEM_HWHL 10
+#define TWOSIGMA_ATMO 0
+#define NOMINAL_ATMO 1
+#define USER_ATMO 2
 
 /* Modes for InterProcess Comm */
 #define IPC_OFF 0
 #define IPC_TX 1
 #define IPC_RX 2
-#define IPC_WRITEFILE 3
-#define IPC_READFILE 4
-#define IPC_SPIRENT 5
-#define IPC_FFTB 6
+#define IPC_TXRX 3
+#define IPC_ACS 4
+#define IPC_WRITEFILE 5
+#define IPC_READFILE 6
+#define IPC_SPIRENT 7
+#define IPC_FFTB 8
 
 /* Socket Roles for InterProcess Comm */
 #define IPC_SERVER 0
 #define IPC_CLIENT 1
+#define IPC_GMSEC_CLIENT 2
 
 /* Secs from J2000 to the Unix epoch of 1 Jan 1970 */
 #define UNIX_EPOCH (-946728000.0)
 /* Secs from J2000 to the GPS epoch of 6 Jan 1980 */
 #define GPS_EPOCH  (-630763200.0)
 
+/* Constellation Classes */
+#define NUM_CONSTELL 88
+#define MAJOR_CONSTELL 0
+#define ZODIAC_CONSTELL 1
+#define MINOR_CONSTELL 2
+
+/* Joint Types */
+#define PASSIVE_JOINT 0
+#define ACTUATED_JOINT 1
+#define STEPPER_MOTOR_JOINT 2
+#define VIBRATION_ISOLATOR_JOINT 3
+#define SLOSH_JOINT 4
+#define STEERING_MIRROR_JOINT 5
+#define TVC_JOINT 6
+#define AD_HOC_JOINT 7
+
+/* For Shakers */
+#define FORCE 0
+#define TORQUE 1
+
+/* Thruster Command Modes */
+#define THR_PULSED 0
+#define THR_PROPORTIONAL 1
 
 #endif /* __42DEFINES_H__ */

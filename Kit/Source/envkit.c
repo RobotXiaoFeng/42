@@ -34,7 +34,7 @@ void EGM96(const char *ModelPath, long N, long M, double mass, double pbn[3],
       double r,theta,phi,Fr,Fth,Fph,Fe[3];
       double dum1,dum2;
       double Re = 6378.145E3;
-      double mu = 3.98604E14;
+      double mu = 3.986004E14;
       long i,n,m;
       static long First = 1;
       FILE *EGM96file;
@@ -80,12 +80,11 @@ void EGM96(const char *ModelPath, long N, long M, double mass, double pbn[3],
       cph = cos(phi);
 
 /*    Find Fr, Fth, Fph */
-      SphericalHarmonics(N,M,r,phi,theta,Re,mu/Re,C,S,
-                         gradV);
+      SphericalHarmonics(N,M,r,phi,theta,Re,mu/Re,C,S,gradV);
       Fr  = mass*gradV[0];
       Fth = mass*gradV[1];
       Fph = mass*gradV[2];
-
+      
 /*    Transform back to cartesian coords in Newtonian frame */
       Fe[0]=(Fr*sth+Fth*cth)*cph-Fph*sph;
       Fe[1]=(Fr*sth+Fth*cth)*sph+Fph*cph;
@@ -152,8 +151,7 @@ void GMM2B(const char *ModelPath, long N, long M, double mass, double pbn[3],
       cph = cos(phi);
 
 /*    Find Fr, Fth, Fph */
-      SphericalHarmonics(N,M,r,phi,theta,Re,mu/Re,C,S,
-                         gradV);
+      SphericalHarmonics(N,M,r,phi,theta,Re,mu/Re,C,S,gradV);
       Fr  = mass*gradV[0];
       Fth = mass*gradV[1];
       Fph = mass*gradV[2];
@@ -224,8 +222,7 @@ void GLGM2(const char *ModelPath, long N, long M, double mass, double pbn[3],
       cph = cos(phi);
 
 /*    Find Fr, Fth, Fph */
-      SphericalHarmonics(N,M,r,phi,theta,Re,mu/Re,C,S,
-                         gradV);
+      SphericalHarmonics(N,M,r,phi,theta,Re,mu/Re,C,S,gradV);
       Fr  = mass*gradV[0];
       Fth = mass*gradV[1];
       Fph = mass*gradV[2];
@@ -258,8 +255,8 @@ void IGRFMagField(const char *ModelPath, long N, long M, double pbn[3],double Pr
 
       if (First) {
          First = 0;
-         /* Get data from IGRF00.txt */
-         IGRFfile = FileOpen(ModelPath,"igrf00.txt","r");
+         /* Get data from IGRF20.txt */
+         IGRFfile = FileOpen(ModelPath,"igrf20.txt","r");
          fscanf(IGRFfile,"%[^\n] %[\n]",junk,&newline);
          fscanf(IGRFfile,"%lf %lf %lf",
                 &dum1,&Re,&dum2);
@@ -335,6 +332,25 @@ void DipoleMagField(double DipoleMoment, double DipoleAxis[3],
 
 }
 /**********************************************************************/
+/* Ref: Rostoker, "Geomagnetic Indices", Rev. of Geophysics and       */
+/* Space Physics, Vol 10, No. 4, pp. 935-950, Nov 1972.               */
+/* Kp is in the scale [0o 0+ 1- 1o 1+ ... 8+ 9- 9o].                  */
+/* We map it to [0.0 0.33 0.67 1.0 1.33 ... 8.33 8.67 9.0] for ease   */
+/* of table lookup.                                                   */
+double KpToAp(double Kp)
+{
+      long k;
+      double Ap[28] = {  0,  2,  3,  4,  5,  6,  7,
+                         9, 12, 15, 18, 22, 27, 32,
+                        39, 48, 56, 67, 80, 94,111,
+                       132,154,179,207,236,300,400};
+      
+      k = (long) (3.0*Kp+0.5); /* Round to the nearest 1/3 */
+      if (k < 0) k = 0;
+      if (k > 27) k = 27;
+      
+      return(Ap[k]);
+}/**********************************************************************/
 /*                                                                    */
 /* This is an atmospheric density model, described in  "Models of     */
 /* Earth's Atmosphere", NASA SP-8021, May 1969.  It is a modification */
@@ -903,7 +919,7 @@ long PolyhedronGravAcc(struct GeomType *G, double Density,
       double re1[3],re2[3],rf1[3],rf2[3],rf3[3],r1,r2,r3,r2xr3[3];
       double Num,Den,Er[3],Fr[3],Le,wf,SumWf,Gsig;
       long PosIsOutside;
-      long Ie,Ip,i,j;
+      long Ie,Ip,i;
       
       for(i=0;i<3;i++) {
          GravAccW[i] = 0.0;
@@ -976,7 +992,7 @@ long PolyhedronGravGrad(struct GeomType *G, double Density, double PosN[3],
       double *V1,*V2,*V3;
       double PosW[3],GravGradW[3][3],GC[3][3];
       double re1[3],re2[3],rf1[3],rf2[3],rf3[3],r1,r2,r3,r2xr3[3];
-      double Num,Den,Er[3],Fr[3],Le,wf,SumWf,Gsig;
+      double Num,Den,Le,wf,SumWf,Gsig;
       long PosIsOutside;
       long Ie,Ip,i,j;
       

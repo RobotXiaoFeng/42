@@ -13,7 +13,15 @@
 
 
 #include "42.h"
-/* #include "42fsw.h" */
+
+#ifdef _ENABLE_RBT_
+   void RbtFSW(struct SCType *S);
+#endif
+
+void AcFsw(struct AcType *AC);
+void WriteToSocket(SOCKET Socket, char **Prefix, long Nprefix, long EchoEnabled);
+void ReadFromSocket(SOCKET Socket, long EchoEnabled);
+
 
 /* #ifdef __cplusplus
 ** namespace _42 {
@@ -37,6 +45,8 @@ long FswCmdInterpreter(char CmdLine[512],double *CmdTime)
       double wc,amax,vmax;
       long RotSeq;
       char VecString[20],TargetString[20];
+      double ThrPulseCmd;
+      double ThrLevelCmd;
 
       if (sscanf(CmdLine,"%lf SC[%ld] qrn = [%lf %lf %lf %lf]",
          CmdTime,&Isc,&q[0],&q[1],&q[2],&q[3]) == 6) {
@@ -79,9 +89,7 @@ long FswCmdInterpreter(char CmdLine[512],double *CmdTime)
       else if (sscanf(CmdLine,"%lf SC[%ld].G[%ld] Cmd Angles = [%lf %lf %lf] deg",
          CmdTime,&Isc,&Ig,&Ang[0],&Ang[1],&Ang[2]) == 6) {
          NewCmdProcessed = TRUE;
-         Cmd = &SC[Isc].AC.G[Ig].Cmd;
-         Cmd->Parm = PARM_EULER_ANGLES;
-         for(i=0;i<3;i++) Cmd->Ang[i] = Ang[i]*D2R;
+         for(i=0;i<3;i++) SC[Isc].AC.G[Ig].Cmd.Ang[i] = Ang[i]*D2R;
       }
 
       else if (sscanf(CmdLine,"%lf Point SC[%ld].B[%ld] %s Vector [%lf %lf %lf] at RA = %lf deg, Dec = %lf deg",
@@ -297,6 +305,7 @@ long FswCmdInterpreter(char CmdLine[512],double *CmdTime)
          }
          UNITV(VecR);
          for(i=0;i<3;i++) CV->R[i] = VecR[i];
+         for(i=0;i<3;i++) CV->W[i] = 0.0;
       }
 
       else if (sscanf(CmdLine,"%lf Align SC[%ld].B[%ld] %s Vector [%lf %lf %lf] with SC[%ld].B[%ld] vector [%lf %lf %lf]",
@@ -355,13 +364,16 @@ long FswCmdInterpreter(char CmdLine[512],double *CmdTime)
          }
       }
 
-      else if (sscanf(CmdLine,"%lf SC[%ld].Thr[%ld] %s",
-         CmdTime,&Isc,&Ithr,response) == 4) {
+      else if (sscanf(CmdLine,"%lf SC[%ld].AC.Thr[%ld].PulseWidthCmd = %lf",
+         CmdTime,&Isc,&Ithr,&ThrPulseCmd) == 4) {
          NewCmdProcessed = TRUE;
-         if (DecodeString(response))
-            SC[Isc].AC.Thr[Ithr].PulseWidthCmd = SC[Isc].AC.DT;
-         else
-            SC[Isc].AC.Thr[Ithr].PulseWidthCmd = 0.0;
+         SC[Isc].AC.Thr[Ithr].PulseWidthCmd = ThrPulseCmd;
+      }
+
+      else if (sscanf(CmdLine,"%lf SC[%ld].AC.Thr[%ld].ThrustLevelCmd = %lf",
+         CmdTime,&Isc,&Ithr,&ThrLevelCmd) == 4) {
+         NewCmdProcessed = TRUE;
+         SC[Isc].AC.Thr[Ithr].ThrustLevelCmd = ThrLevelCmd;
       }
 
       else if (sscanf(CmdLine,"Event Eclipse Entry SC[%ld] qrl = [%lf %lf %lf %lf]",
@@ -652,9 +664,9 @@ void ThreeAxisAttitudeCommand(struct SCType *S)
                   SC[SV->TrgSC].B[SV->TrgBody].wn,SV->wn);
             }
             if (MAGV(PV->N) == 0.0 || MAGV(PV->R) == 0.0)
-               printf("Warning: Primary Vector not defined for SC[%ld]\n",S->Tag);
+               printf("Warning: Primary Vector not defined for SC[%ld]\n",S->ID);
             if (MAGV(SV->N) == 0.0 || MAGV(SV->R) == 0.0)
-               printf("Warning: Secondary Vector not defined for SC[%ld]\n",S->Tag);
+               printf("Warning: Secondary Vector not defined for SC[%ld]\n",S->ID);
             TRIAD(PV->N,SV->N,PV->R,SV->R,CRN);
             C2Q(CRN,Cmd->qrn);
             for(i=0;i<3;i++) {
@@ -739,20 +751,52 @@ void SpinnerCommand(struct SCType *S)
 /* the AC structure.                                                 */
 void InitAC(struct SCType *S)
 {
-      long Ig,i,j;
-      struct AcsType *AC;
+      long Ib,Ig,i,j,k;
+      struct AcType *AC;
       double **A,**Aplus;
+      double r[3];
 
       AC = &S->AC;
 
+      S->InitAC = 0;
       AC->Init = 1;
-
+      
+      AC->ID = S->ID;
+      
+      /* Fundamental Constants */
+      AC->Pi = Pi;
+      AC->TwoPi = TwoPi;
+      
+      /* Time, Mass */
+      AC->DT = S->FswSampleTime;
+      AC->mass = S->mass;
+      for (i=0;i<3;i++) {
+         AC->cm[i] = S->cm[i];
+         for(j=0;j<3;j++) {
+            AC->MOI[i][j] = S->I[i][j];
+         }
+      }
+      
+      /* Bodies */
+      AC->Nb = S->Nb;
+      if (AC->Nb > 0) {
+         AC->B = (struct AcBodyType *) calloc(AC->Nb,sizeof(struct AcBodyType));
+         for (Ib=0;Ib<AC->Nb;Ib++) {
+            AC->B[Ib].mass = S->B[Ib].mass;
+            for(i=0;i<3;i++) {
+               AC->B[Ib].cm[i] = S->B[Ib].cm[i];
+               for(j=0;j<3;j++) {
+                  AC->B[Ib].MOI[i][j] = S->B[Ib].I[i][j];
+               }
+            }
+         }
+      }
+      
       /* Joints */
       AC->Ng = S->Ng;
-      if (S->Ng > 0) {
-         AC->G = (struct AcJointType *) calloc(S->Ng,sizeof(struct AcJointType));
+      if (AC->Ng > 0) {
+         AC->G = (struct AcJointType *) calloc(AC->Ng,sizeof(struct AcJointType));
          for(Ig=0;Ig<AC->Ng;Ig++) {
-            AC->G[Ig].IsUnderActiveControl = TRUE;
             AC->G[Ig].IsSpherical = S->G[Ig].IsSpherical;
             AC->G[Ig].RotDOF = S->G[Ig].RotDOF;
             AC->G[Ig].TrnDOF = S->G[Ig].TrnDOF;
@@ -767,12 +811,10 @@ void InitAC(struct SCType *S)
          }
       }
       
-      /* Accelerometer Axes */
-
       /* Gyro Axes */
       AC->Ngyro = S->Ngyro;
-      if (S->Ngyro > 0) {
-         AC->Gyro = (struct AcGyroType *) calloc(S->Ngyro,sizeof(struct AcGyroType));
+      if (AC->Ngyro > 0) {
+         AC->Gyro = (struct AcGyroType *) calloc(AC->Ngyro,sizeof(struct AcGyroType));
          for(i=0;i<S->Ngyro;i++) {
             for(j=0;j<3;j++) {
                AC->Gyro[i].Axis[j] = S->Gyro[i].Axis[j];
@@ -782,8 +824,8 @@ void InitAC(struct SCType *S)
 
       /* Magnetometer Axes */
       AC->Nmag = S->Nmag;
-      if (S->Nmag > 0) {
-         AC->MAG = (struct AcMagnetometerType *) calloc(S->Nmag,sizeof(struct AcMagnetometerType));
+      if (AC->Nmag > 0) {
+         AC->MAG = (struct AcMagnetometerType *) calloc(AC->Nmag,sizeof(struct AcMagnetometerType));
          for(i=0;i<S->Nmag;i++) {
             for(j=0;j<3;j++) {
                AC->MAG[i].Axis[j] = S->MAG[i].Axis[j];
@@ -792,17 +834,65 @@ void InitAC(struct SCType *S)
       }
 
       /* Coarse Sun Sensors */
-      /* Star Trackers */
-      /* Fine Sun Sensors */
-      /* GPS */
+      AC->Ncss = S->Ncss;
+      if (AC->Ncss > 0) {
+         AC->CSS = (struct AcCssType *) calloc(AC->Ncss,sizeof(struct AcCssType));
+         for(i=0;i<S->Ncss;i++) {
+            AC->CSS[i].Body = S->CSS[i].Body;
+            for(j=0;j<3;j++) AC->CSS[i].Axis[j] = S->CSS[i].Axis[j];
+            AC->CSS[i].Scale = S->CSS[i].Scale;
+         }
+      }
       
+      /* Fine Sun Sensors */
+      AC->Nfss = S->Nfss;
+      if (AC->Nfss > 0) {
+         AC->FSS = (struct AcFssType *) calloc(AC->Nfss,sizeof(struct AcFssType));
+         for(k=0;k<S->Nfss;k++) {
+            for(i=0;i<3;i++) {
+               for(j=0;j<3;j++) AC->FSS[k].CB[i][j] = S->FSS[k].CB[i][j];
+            }
+            for(i=0;i<4;i++) AC->FSS[k].qb[i] = S->FSS[k].qb[i];
+         }
+      }
+
+      /* Star Trackers */
+      AC->Nst = S->Nst;
+      if (AC->Nst > 0) {
+         AC->ST = (struct AcStarTrackerType *) calloc(AC->Nst,sizeof(struct AcStarTrackerType));
+         for(k=0;k<S->Nst;k++) {
+            for(i=0;i<3;i++) {
+               for(j=0;j<3;j++) AC->ST[k].CB[i][j] = S->ST[k].CB[i][j];
+            }
+            for(i=0;i<4;i++) AC->ST[k].qb[i] = S->ST[k].qb[i];
+         }
+      }
+
+      /* GPS */
+      AC->Ngps = S->Ngps;
+      if (AC->Ngps > 0) {
+         AC->GPS = (struct AcGpsType *) calloc(AC->Ngps,sizeof(struct AcGpsType)); 
+      }     
+      
+      /* Accelerometer Axes */
+      AC->Nacc = S->Nacc;
+      if (AC->Nacc > 0) {
+         AC->Accel = (struct AcAccelType *) calloc(AC->Nacc,sizeof(struct AcAccelType));
+         for(i=0;i<S->Nacc;i++) {
+            for(j=0;j<3;j++) {
+               AC->Accel[i].Axis[j] = S->Accel[i].Axis[j];
+            }
+         }
+      }
+
       /* Wheels */
       AC->Nwhl = S->Nw;
-      if (S->Nw > 0) {
+      if (AC->Nwhl > 0) {
          AC->Whl = (struct AcWhlType *) calloc(AC->Nwhl,sizeof(struct AcWhlType));
          A = CreateMatrix(3,AC->Nwhl);
          Aplus = CreateMatrix(AC->Nwhl,3);
          for (i=0;i<S->Nw;i++) {
+            AC->Whl[i].Body = S->Whl[i].Body;
             for (j=0;j<3;j++) {
                AC->Whl[i].Axis[j] = S->Whl[i].A[j];
                A[j][i] = S->Whl[i].A[j];
@@ -830,7 +920,7 @@ void InitAC(struct SCType *S)
 
       /* Magnetic Torquer Bars */
       AC->Nmtb = S->Nmtb;
-      if (S->Nmtb > 0) {
+      if (AC->Nmtb > 0) {
          AC->MTB = (struct AcMtbType *) calloc(AC->Nmtb,sizeof(struct AcMtbType));
          A = CreateMatrix(3,AC->Nmtb);
          Aplus = CreateMatrix(AC->Nmtb,3);
@@ -860,24 +950,17 @@ void InitAC(struct SCType *S)
 
       /* Thrusters */
       AC->Nthr = S->Nthr;
-      if (S->Nthr > 0) {
+      if (AC->Nthr > 0) {
          AC->Thr = (struct AcThrType *) calloc(AC->Nthr,sizeof(struct AcThrType));
          for(i=0;i<S->Nthr;i++) {
+            AC->Thr[i].Body = S->Thr[i].Body;
             AC->Thr[i].Fmax = S->Thr[i].Fmax;
             for(j=0;j<3;j++) {
                AC->Thr[i].Axis[j] = S->Thr[i].A[j];
-               AC->Thr[i].PosB[j] = S->Thr[i].PosB[j];
+               AC->Thr[i].PosB[j] = S->B[S->Thr[i].Body].Node[S->Thr[i].Node].PosB[j];
+               r[j] = AC->Thr[i].PosB[j] - AC->cm[j];
             }
-         }
-      }
-      
-      /* Control Moment Gyros */
-
-      AC->DT = DTSIM;
-      AC->mass = S->mass;
-      for (i=0;i<3;i++) {
-         for(j=0;j<3;j++) {
-            AC->MOI[i][j] = S->I[i][j];
+            VxV(r,AC->Thr[i].Axis,AC->Thr[i].rxA);
          }
       }
       
@@ -889,10 +972,19 @@ void InitAC(struct SCType *S)
       AC->ThreeAxisCtrl.Init = 1;
       AC->IssCtrl.Init = 1;
       AC->CmgCtrl.Init = 1;
+      AC->ThrCtrl.Init = 1;
+      AC->CfsCtrl.Init = 1;
+      AC->ThrSteerCtrl.Init = 1;
       
       AC->PrototypeCtrl.wc = 0.05*TwoPi;
       AC->PrototypeCtrl.amax = 0.01;
       AC->PrototypeCtrl.vmax = 0.5*D2R;
+      
+      /* Initialize variables to avoid divide-by-zero before first sensor measurements */
+      AC->qbn[3] = 1.0;
+      AC->svb[0] = 1.0;
+      AC->bvb[0] = 1.0E-4;
+      
 }
 /**********************************************************************/
 /* The effective inertia for a gimbal is assumed to be the moment of  */
@@ -922,9 +1014,9 @@ void FindAppendageInertia(long Ig, struct SCType *S,double Iapp[3])
             while (Jg > Ig) {
                G = &S->G[Jg];
                MxM(G->CBoGo,G->CGiBi,Coi);
-               for(k=0;k<3;k++) rho[k] -= G->rout[k];
+               for(k=0;k<3;k++) rho[k] -= G->ro[k];
                MTxV(Coi,rho,Cr);
-               for(k=0;k<3;k++) rho[k] = Cr[k] + G->rin[k];
+               for(k=0;k<3;k++) rho[k] = Cr[k] + G->ri[k];
                for(j=0;j<3;j++) {
                   for(k=0;k<3;k++) Csofar[j][k] = CBoBi[j][k];
                }
@@ -932,7 +1024,7 @@ void FindAppendageInertia(long Ig, struct SCType *S,double Iapp[3])
                Jg = S->B[G->Bin].Gin;
             }
             G = &S->G[Ig];
-            for(k=0;k<3;k++) rho[k] -= G->rout[k];
+            for(k=0;k<3;k++) rho[k] -= G->ro[k];
             MTxV(G->CBoGo,rho,rhog);
             MTxM(CBoBi,G->CBoGo,CBoG);
             /* Parallel axis theorem */
@@ -943,10 +1035,66 @@ void FindAppendageInertia(long Ig, struct SCType *S,double Iapp[3])
       }
 }
 /**********************************************************************/
+void MapCmdsToActuators(struct SCType *S)
+{
+      struct IdealActType *I;
+      struct WhlType *W;
+      struct MTBType *M;
+      struct ThrType *T;
+      struct AcType *AC;
+      long i,Iw,Im,It;
+
+      AC = &S->AC;
+      
+      if (S->GainAndDelayActive) {
+         for(i=0;i<3;i++) {
+            I = &S->IdealAct[i];
+            I->Fcmd = Delay(I->FrcDelay,S->LoopGain*AC->IdealFrc[i]);
+            I->Tcmd = Delay(I->TrqDelay,S->LoopGain*AC->IdealTrq[i]);
+         }
+            
+         for(Iw=0;Iw<AC->Nwhl;Iw++) {
+            W = &S->Whl[Iw];
+            W->Tcmd = Delay(W->Delay,S->LoopGain*AC->Whl[Iw].Tcmd);
+         }
+         for(Im=0;Im<AC->Nmtb;Im++) {
+            M = &S->MTB[Im];
+            M->Mcmd = Delay(M->Delay,S->LoopGain*AC->MTB[Im].Mcmd);
+         }
+         for(It=0;It<AC->Nthr;It++) {
+            T = &S->Thr[It];
+            if (T->Mode == THR_PULSED) 
+               T->PulseWidthCmd = Delay(T->Delay,S->LoopGain*AC->Thr[It].PulseWidthCmd);
+            else
+               T->ThrustLevelCmd = Delay(T->Delay,S->LoopGain*AC->Thr[It].ThrustLevelCmd);
+         }         
+      }
+      else if (S->FswSampleCounter == 0) {      
+         for(i=0;i<3;i++) {
+            S->IdealAct[i].Fcmd = AC->IdealFrc[i];
+            S->IdealAct[i].Tcmd = AC->IdealTrq[i];
+         }
+      
+         for(Iw=0;Iw<AC->Nwhl;Iw++) {
+            S->Whl[Iw].Tcmd = AC->Whl[Iw].Tcmd;
+         }
+         for(Im=0;Im<AC->Nmtb;Im++) {
+            S->MTB[Im].Mcmd = AC->MTB[Im].Mcmd;
+         }
+         for(It=0;It<AC->Nthr;It++) {
+            if (S->Thr[It].Mode == THR_PULSED) 
+               S->Thr[It].PulseWidthCmd = AC->Thr[It].PulseWidthCmd;
+            else
+               S->Thr[It].ThrustLevelCmd = AC->Thr[It].ThrustLevelCmd;            
+         }
+      } 
+              
+}
+/**********************************************************************/
 /*  This simple control law is suitable for rapid prototyping.        */
 void PrototypeFSW(struct SCType *S)
 {
-      struct AcsType *AC;
+      struct AcType *AC;
       struct AcPrototypeCtrlType *C;
       struct BodyType *B;
       struct CmdType *Cmd;
@@ -958,7 +1106,7 @@ void PrototypeFSW(struct SCType *S)
       AC = &S->AC;
       C = &AC->PrototypeCtrl;
       Cmd = &AC->Cmd;
-      
+            
       if (Cmd->Parm == PARM_AXIS_SPIN) {
          if (C->Init) {
             C->Init = 0;
@@ -986,6 +1134,7 @@ void PrototypeFSW(struct SCType *S)
       else {
          if (C->Init) {
             C->Init = 0;
+            
             for(Ig=0;Ig<AC->Ng;Ig++) {
                FindAppendageInertia(Ig,S,Iapp);
                for(j=0;j<3;j++) {
@@ -1024,7 +1173,7 @@ void SpinnerFSW(struct SCType *S)
       double w1,w2,w3;
       double CyclicTorque,OrbPeriod,MaxPtgErr;
       long i,Imtb;
-      struct AcsType *AC;
+      struct AcType *AC;
       struct AcSpinnerCtrlType *C;
       struct AcMtbType *M;
 
@@ -1121,7 +1270,7 @@ void MomBiasFSW(struct SCType *S)
       double Hwcmd = -50.0;
       double Zvec[3] = {0.0,0.0,1.0};
       long i;
-      struct AcsType *AC;
+      struct AcType *AC;
       struct AcMomBiasCtrlType *C;
 
       AC = &S->AC;
@@ -1189,8 +1338,9 @@ void ThreeAxisFSW(struct SCType *S)
       double qrn[4],qbr[4],svr[3];
       double Herr[3],HxB[3];
       double Zvec[3] = {0.0,0.0,1.0};
+      double AngErr;
       long i,j;
-      struct AcsType *AC;
+      struct AcType *AC;
       struct AcThreeAxisCtrlType *C;
       
       AC = &S->AC;
@@ -1198,14 +1348,14 @@ void ThreeAxisFSW(struct SCType *S)
 
       if (C->Init) {
          C->Init = 0;
-			for(j=0;j<3;j++) {
-				AC->G[0].Cmd.AngRate[j] = 0.0;
-				AC->G[0].Cmd.Ang[j] = 0.0;
-				AC->G[0].MaxAngRate[j] = 0.2*D2R;
-				AC->G[0].MaxTrq[j] = 100.0;
-				FindPDGains(S->B[1].I[1][1],0.02*TwoPi,1.0,
-					&AC->G[0].AngRateGain[j],&AC->G[0].AngGain[j]);
-			}
+         for(j=0;j<3;j++) {
+            AC->G[0].Cmd.AngRate[j] = 0.0;
+            AC->G[0].Cmd.Ang[j] = 0.0;
+            AC->G[0].MaxAngRate[j] = 0.2*D2R;
+            AC->G[0].MaxTrq[j] = 100.0;
+            FindPDGains(S->B[1].I[1][1],0.02*TwoPi,1.0,
+               &AC->G[0].AngRateGain[j],&AC->G[0].AngGain[j]);
+         }
 
          for(i=0;i<3;i++) {
             FindPDGains(AC->MOI[i][i],0.1,0.7,
@@ -1250,16 +1400,22 @@ void ThreeAxisFSW(struct SCType *S)
          AC->G[0].Cmd.Ang[0] += TwoPi;
       if (AC->G[0].Ang[0] - AC->G[0].Cmd.Ang[0] < -Pi)
          AC->G[0].Cmd.Ang[0] -= TwoPi;
+
+      AngErr = AC->G[0].Ang[0] - AC->G[0].Cmd.Ang[0];
+      AC->G[0].Cmd.AngRate[0] -= AC->G[0].AngGain[0]/AC->G[0].AngRateGain[0]*AngErr;
+      AC->G[0].Cmd.AngRate[0] = Limit(AC->G[0].Cmd.AngRate[0],
+         -AC->G[0].MaxAngRate[0],AC->G[0].MaxAngRate[0]);
 }
 /**********************************************************************/
 void IssFSW(struct SCType *S)
 {
       long Ig,i,j;
-      struct AcsType *AC;
+      struct AcType *AC;
       struct AcIssCtrlType *C;
       double Identity[3][3] = {{1.0,0.0,0.0},{0.0,1.0,0.0},{0.0,0.0,1.0}};
       double Zvec[3] = {0.0,0.0,1.0};
       double GimCmd[3];
+      double AngErr;
       double svb[3];
       double Iapp[3];
       double r[3],rb[3],tvb[3],MinRoZ,RoZ;
@@ -1311,15 +1467,15 @@ void IssFSW(struct SCType *S)
       AC->G[0].Cmd.AngRate[0] = -S->wln[1];
       AC->G[1].Cmd.AngRate[0] = S->wln[1];
 
-      AC->G[2].Cmd.Ang[0] = -GimCmd[1];
-      AC->G[3].Cmd.Ang[0] =  GimCmd[1];
-      AC->G[4].Cmd.Ang[0] = -GimCmd[1];
-      AC->G[5].Cmd.Ang[0] =  GimCmd[1];
+      AC->G[2].Cmd.Ang[0] =  GimCmd[1];
+      AC->G[3].Cmd.Ang[0] = -GimCmd[1];
+      AC->G[4].Cmd.Ang[0] =  GimCmd[1];
+      AC->G[5].Cmd.Ang[0] = -GimCmd[1];
 
-      AC->G[6].Cmd.Ang[0] =  GimCmd[1];
-      AC->G[7].Cmd.Ang[0] = -GimCmd[1];
-      AC->G[8].Cmd.Ang[0] =  GimCmd[1];
-      AC->G[9].Cmd.Ang[0] = -GimCmd[1];
+      AC->G[6].Cmd.Ang[0] = -GimCmd[1];
+      AC->G[7].Cmd.Ang[0] =  GimCmd[1];
+      AC->G[8].Cmd.Ang[0] = -GimCmd[1];
+      AC->G[9].Cmd.Ang[0] =  GimCmd[1];
 
 /* .. Point SM Solar Array */
       AC->G[12].Cmd.Ang[0] = GimCmd[0];
@@ -1349,60 +1505,247 @@ void IssFSW(struct SCType *S)
 
       AC->G[14].Cmd.Ang[0] = Limit(GimCmd[0],-120.0*D2R,120.0*D2R);
       AC->G[14].Cmd.Ang[1] = Limit(GimCmd[1],-65.0*D2R,65.0*D2R);
+      
+      for(Ig=0;Ig<AC->Ng;Ig++) {
+         for(j=0;j<AC->G[Ig].RotDOF;j++) {
+            AngErr = AC->G[Ig].Ang[j] - AC->G[Ig].Cmd.Ang[j];
+            if (AngErr >  Pi) AngErr -= TwoPi;
+            if (AngErr < -Pi) AngErr += TwoPi;
+            AC->G[Ig].Cmd.AngRate[j] = -AC->G[Ig].AngGain[j]/AC->G[Ig].AngRateGain[j]*AngErr;
+            AC->G[Ig].Cmd.AngRate[j] = Limit(AC->G[Ig].Cmd.AngRate[j],
+               -AC->G[Ig].MaxAngRate[j],AC->G[Ig].MaxAngRate[j]);
+         }
+      }
 
 }
 /**********************************************************************/
 void CmgFSW(struct SCType *S)
 {
-#if 0
-      double wcmd[3],Tcmd[3],Axis[4][3],Gim[4][3],H[4],AngRateCmd[4];
-      double Gain;
+      struct AcType *AC;
+      struct AcCmgCtrlType *C;
+      double CBL[3][3],qbl[4],qbr[4];
+      double CRL[3][3];
+      double Axis[4][3],Gim[4][3],H[4];
+      static double MoveTime = 200.0;
+      static double RPYCmd[3] = {1.0,1.0,1.0};
+      static double qrl[4];
+      static long Idx = 0;
       long i,j;
-      static FILE *outfile;
-      static long First = 1;
 
-      if (First) {
-         First = 0;
-         outfile = FileOpen(InOutPath,"CmgGain.42","w");
+      AC = &S->AC;
+      C = &AC->CmgCtrl;
+
+      if (C->Init) {
+         C->Init = 0;
+         for(i=0;i<3;i++) FindPDGains(AC->MOI[i][i],0.5,0.7,&C->Kr[i],&C->Kp[i]);
+         for(i=0;i<4;i++) {
+            AC->G[i].Cmd.Ang[0] = 0.0;
+            AC->G[i].AngGain[0] = 0.0;
+            AC->G[i].AngRateGain[0] = 100.0;
+            AC->G[i].MaxAngRate[0] = 1.0*D2R;
+            AC->G[i].MaxTrq[0] = 5.0;
+         }
       }
 
-      wcmd[0] = 5.0*D2R*sin(0.01*SimTime);
-      wcmd[1] = 2.0*D2R*sin(0.02*SimTime);
-      wcmd[2] = 1.0*D2R*sin(0.05*SimTime);
-      /* wcmd[0] = 0.0;
-      ** wcmd[1] = 0.0*D2R;
-      ** wcmd[2] = 1.0*D2R; */
+      MoveTime -= AC->DT;
+      if (MoveTime < 0.0) {
+         MoveTime = 200.0;
+         Idx = (Idx+1)%3;
+         if (RPYCmd[Idx] > 0.0) RPYCmd[Idx] = -60.0*D2R;
+         else RPYCmd[Idx] = 60.0*D2R;
+         A2C(123,RPYCmd[0],RPYCmd[1],RPYCmd[2],CRL);
+         C2Q(CRL,qrl);
+      }
 
-      for(i=0;i<3;i++) Tcmd[i] = -100.0*(S->B[0].wn[i]-wcmd[i]);
-
-      /* Tcmd[0] = 5.0*sin(0.01*SimTime);
-      ** Tcmd[1] = 2.0*sin(0.02*SimTime);
-      ** Tcmd[2] = 1.0*sin(0.05*SimTime); */
+      MxMT(S->B[0].CN,S->CLN,CBL);
+      C2Q(CBL,qbl);
+      QxQT(qbl,qrl,qbr);
+      RECTIFYQ(qbr);
+      for(i=0;i<3;i++) {
+         C->therr[i] = 2.0*qbr[i];
+         C->werr[i] = S->B[0].wn[i];
+         C->Tcmd[i] = -C->Kr[i]*C->werr[i] - C->Kp[i]*C->therr[i]; 
+      }
 
       for(i=0;i<4;i++) {
          for(j=0;j<3;j++) {
-            Axis[i][j] = S->CMG[i].A[j];
-            Gim[i][j] = S->CMG[i].CGB[0][j];  /* Because Seq = 1 */
+            Axis[i][j] = AC->G[i].COI[2][j];
+            Gim[i][j] = AC->G[i].COI[0][j];  
          }
-         H[i] = S->CMG[i].H;
+         H[i] = 75.0;
       }
 
-      Gain = CMGLaw4x1DOF(Tcmd,Axis,Gim,H,AngRateCmd);
+      CMGLaw4x1DOF(C->Tcmd,Axis,Gim,H,C->AngRateCmd);
 
-      for(i=0;i<4;i++)
-         S->CMG[i].angrate[0] = AngRateCmd[i];
-
-      if (OutFlag) {
-         fprintf(outfile,"%lf\n",Gain);
+      for(i=0;i<4;i++) {
+         AC->G[i].Cmd.AngRate[0] = C->AngRateCmd[i];
       }
+}
+/**********************************************************************/
+void ThrFSW(struct SCType *S)
+{
+      struct AcType *AC;
+      struct AcThrType *T;
+      struct AcThrCtrlType *C;
+      static double MoveTime = 0.0;
+      double RollCmd[4] = {30.0,0.0,-30.0,0.0};
+      double PitchCmd[4] = {0.0,30.0,0.0,-30.0};
+      double YawCmd[4] = {0.0,0.0,0.0,0.0};
+      double PosXcmd[4] = {0.0,0.0,0.0,0.0};
+      double PosYcmd[4] = {24.0,0.0,-24.0,0.0};
+      double PosZcmd[4] = {0.0,24.0,0.0,-24.0};
+      static double CRL[3][3],PosRL[3];
+      double CRN[3][3],qrn[4],PosRN[3];
+      double FcmdB[3];
+      double FoA,TorxA;
+      static long Idx = 0;
+      long i;
+      
+      AC = &S->AC;
+      C = &AC->ThrCtrl;
+      
+      if (C->Init) {
+         C->Init = 0;
+         for(i=0;i<3;i++) FindPDGains(AC->MOI[i][i],0.1,0.7,&C->Kw[i],&C->Kth[i]);
+         FindPDGains(AC->mass,0.05,1.0,&C->Kv,&C->Kp);
+      }
+      
+/* .. Commanded Attitude and Position */
+      MoveTime -= AC->DT;
+      if (MoveTime < 0.0) {
+         MoveTime = 1000.0;
+         Idx = (Idx+1)%4;
+         A2C(123,RollCmd[Idx]*D2R,PitchCmd[Idx]*D2R,YawCmd[Idx]*D2R,CRL);
+         PosRL[0] = PosXcmd[Idx];
+         PosRL[1] = PosYcmd[Idx];
+         PosRL[2] = PosZcmd[Idx];
+      }
+      MxM(CRL,S->CLN,CRN);
+      C2Q(CRN,qrn);
+      QxQT(AC->qbn,qrn,AC->qbr);
+      RECTIFYQ(AC->qbr);
+      MTxV(S->CLN,PosRL,PosRN);
+      
+/* .. Force and Torque Commands */
+      for(i=0;i<3;i++) {
+         AC->Tcmd[i] = -C->Kw[i]*S->B[0].wn[i] - C->Kth[i]*2.0*AC->qbr[i];
+         AC->Fcmd[i] = -C->Kv*S->VelR[i] - C->Kp*(S->PosR[i] - PosRN[i]);
+         AC->Tcmd[i] = Limit(AC->Tcmd[i],-4.0,4.0);
+      }
+      MxV(S->B[0].CN,AC->Fcmd,FcmdB);
+      for(i=0;i<3;i++)  FcmdB[i] = Limit(FcmdB[i],-2.0,2.0);
+      MTxV(S->B[0].CN,FcmdB,AC->Fcmd);
+      
+#if 0
+/* .. Ideal Actuators to check out controller before tackling thruster logic */
+      for(i=0;i<3;i++) {
+         AC->IdealTrq[i] = AC->Tcmd[i];
+         AC->IdealFrc[i] = AC->Fcmd[i];
+      }
+#else
+/* .. Distribute to Thrusters */
+      for(i=0;i<AC->Nthr;i++) {
+         T = &AC->Thr[i];
+         T->PulseWidthCmd = 0.0;
+         
+         FoA = VoV(FcmdB,T->Axis);
+         TorxA = VoV(AC->Tcmd,T->rxA);
+         if ( FoA > 0.0 && TorxA > 0.0) {
+            T->PulseWidthCmd = (0.25*FoA + TorxA)/T->Fmax*AC->DT;
+         }
+         
+         T->PulseWidthCmd = Limit(T->PulseWidthCmd,0.0,AC->DT);
+      }
+         
 #endif
 }
+#if 0
+/**********************************************************************/
+/* CFS_FSW: A test case to work out interfaces between 42 and a       */
+/* CFS flight software configuration.                                 */
+void CfsFSW(struct AcType *AC)
+{
+      struct AcCfsCtrlType *C;
+      struct AcJointType *G;
+      double L1[3],L2[3],L3[3];
+      double Hb[3],HxB[3];
+      long i;
+      
+      C = &AC->CfsCtrl;
+      G = &AC->G[0];
+
+      if (C->Init) {
+         C->Init = 0;
+         for(i=0;i<3;i++) FindPDGains(AC->MOI[i][i],0.1*TwoPi,0.7,&C->Kr[i],&C->Kp[i]);
+         C->Kunl = 1.0E6;
+         FindPDGains(100.0,0.2,1.0,&G->AngRateGain[0],&G->AngGain[0]);
+         G->MaxAngRate[0] = 1.0*D2R;
+         G->MaxTrq[0] = 10.0;
+      }
+
+/* .. Sensor Processing */
+      GyroProcessing(AC);
+      MagnetometerProcessing(AC);
+      CssProcessing(AC);
+      FssProcessing(AC);
+      StarTrackerProcessing(AC);
+      GpsProcessing(AC);
+      
+/* .. Commanded Attitude */
+      CopyUnitV(AC->PosN,L3);
+      VxV(AC->PosN,AC->VelN,L2);
+      UNITV(L2);
+      UNITV(L3);
+      for(i=0;i<3;i++) {
+         L2[i] = -L2[i];
+         L3[i] = -L3[i];
+      }
+      VxV(L2,L3,L1);
+      UNITV(L1);
+      for(i=0;i<3;i++) {
+         AC->CLN[0][i] = L1[i];
+         AC->CLN[1][i] = L2[i];
+         AC->CLN[2][i] = L3[i];
+      }
+      C2Q(AC->CLN,AC->qln);
+      AC->wln[1] = -MAGV(AC->VelN)/MAGV(AC->PosN);
+            
+/* .. Attitude Control */
+      QxQT(AC->qbn,AC->qln,AC->qbr);
+      RECTIFYQ(AC->qbr);
+      for(i=0;i<3;i++) {
+         C->therr[i] = Limit(2.0*AC->qbr[i],-0.05,0.05);
+         C->werr[i] = AC->wbn[i] - AC->wln[i];
+         AC->Tcmd[i] = Limit(-C->Kr[i]*C->werr[i] - C->Kp[i]*C->therr[i],-0.1,0.1);
+      }
+/* .. Momentum Management */
+      for(i=0;i<3;i++) Hb[i] = AC->MOI[i][i]*AC->wbn[i] + AC->Whl[i].H;
+      VxV(Hb,AC->bvb,HxB);
+      for(i=0;i<3;i++) AC->Mcmd[i] = C->Kunl*HxB[i];
+      
+/* .. Solar Array Steering */
+      G->Cmd.Ang[0] = atan2(AC->svb[0],AC->svb[2]);
+      AngErr = fmod(G->Ang[0]-G->Cmd.Ang[0],TwoPi);
+      if (AngErr >  Pi) AngErr -= TwoPi;
+      if (AngErr < -Pi) AngErr += TwoPi;
+      G->Cmd.AngRate[0] = -G->AngGain[0]/G->AngRateGain[0]*AngErr;
+      G->Cmd.AngRate[0] = Limit(G->Cmd.AngRate[0],-G->MaxAngRate[0],G->MaxAngRate[0]);
+      
+/* .. Actuator Processing */
+      WheelProcessing(AC);
+      MtbProcessing(AC);
+}
+#endif
 /**********************************************************************/
 /* Put your custom controller here                                    */
 void AdHocFSW(struct SCType *S)
 {
-      struct AcsType *AC;
+      struct AcType *AC;
       struct AcAdHocCtrlType *C;
+      double CLN[3][3],CRN[3][3],qrn[4],wln[3];
+      double CRL[3][3] = {{ 0.0, 1.0, 0.0}, 
+                          { 0.0, 0.0,-1.0},
+                          {-1.0, 0.0, 0.0}}; 
       long i;
 
       AC = &S->AC;
@@ -1410,16 +1753,23 @@ void AdHocFSW(struct SCType *S)
 
       if (C->Init) {
          C->Init = 0;
-         for(i=0;i<3;i++)
-            FindPDGains(AC->MOI[i][i],0.1,0.7,
-                        &C->Kr[i],&C->Kp[i]);
+         for(i=0;i<3;i++) {
+            FindPDGains(AC->MOI[i][i],0.1*TwoPi,0.7,&C->Kr[i],&C->Kp[i]);
+            //C->Kp[i] *= 0.5;
+            //C->Kr[i] *= 0.5;
+         }
       }
 
 /* .. Form attitude error signals */
-      RECTIFYQ(AC->qbn);
+      FindCLN(AC->PosN,AC->VelN,CLN,wln);
+      MxM(CRL,CLN,CRN);
+      C2Q(CRN,qrn);
+      QxQT(AC->qbn,qrn,AC->qbr);
+      //for(i=0;i<4;i++) AC->qbr[i] = AC->qbn[i];
+      RECTIFYQ(AC->qbr);
       for(i=0;i<3;i++) {
-         C->therr[i] = 2.0*AC->qbn[i];
-         C->werr[i] = AC->wbn[i];
+         C->therr[i] = Limit(2.0*AC->qbr[i],-0.01,0.01);
+         C->werr[i] = AC->wbn[i] - wln[i];
       }
 
 /* .. Closed-loop attitude control */
@@ -1429,6 +1779,7 @@ void AdHocFSW(struct SCType *S)
       }
 
       for(i=0;i<3;i++) AC->IdealTrq[i] = C->Tcmd[i];
+      //for(i=0;i<3;i++) AC->Whl[i].Tcmd = -C->Tcmd[i];
 }
 /**********************************************************************/
 /*  This function is called at the simulation rate.  Sub-sampling of  */
@@ -1439,34 +1790,79 @@ void AdHocFSW(struct SCType *S)
 /**********************************************************************/
 void FlightSoftWare(struct SCType *S)
 {
+      #ifdef _AC_STANDALONE_
+      struct IpcType *I;
+      long Iipc;
+      #endif
+            
+      S->FswSampleCounter++;
+      if (S->FswSampleCounter >= S->FswMaxCounter) {
+         S->FswSampleCounter = 0;
+         
+         switch(S->FswTag){
+            case PASSIVE_FSW:
+               break;
+            case PROTOTYPE_FSW:
+               PrototypeFSW(S);
+               break;
+            case AD_HOC_FSW:
+               AdHocFSW(S);
+               break;
+            case SPINNER_FSW:
+               SpinnerFSW(S);
+               break;
+            case MOMBIAS_FSW:
+               MomBiasFSW(S);
+               break;
+            case THREE_AXIS_FSW:
+               ThreeAxisFSW(S);
+               break;
+            case ISS_FSW:
+               IssFSW(S);
+               break;
+            case CMG_FSW:
+               CmgFSW(S);
+               break;
+            case THR_FSW:
+               ThrFSW(S);
+               break;
+            case CFS_FSW:
+               #ifdef _AC_STANDALONE_
+               for(Iipc=0;Iipc<Nipc;Iipc++) {
+                  I = &IPC[Iipc];
+                  if (I->Mode == IPC_ACS && I->AcsID == S->AC.ID) {
+                     if (I->Init) {
+                        I->Init = 0;
+                        S->AC.ParmLoadEnabled = 1;
+                        S->AC.ParmDumpEnabled = 1;
+                        S->AC.EchoEnabled = 1;
 
-      switch(S->FswTag){
-         case PASSIVE_FSW:
-            break;
-         case PROTOTYPE_FSW:
-            PrototypeFSW(S);
-            break;
-         case AD_HOC_FSW:
-            AdHocFSW(S);
-            break;
-         case SPINNER_FSW:
-            SpinnerFSW(S);
-            break;
-         case MOMBIAS_FSW:
-            MomBiasFSW(S);
-            break;
-         case THREE_AXIS_FSW:
-            ThreeAxisFSW(S);
-            break;
-         case ISS_FSW:
-            IssFSW(S);
-            break;
-         case CMG_FSW:
-            CmgFSW(S);
-            break;
+                        WriteToSocket(I->Socket,I->Prefix,I->Nprefix,I->EchoEnabled);
+                        ReadFromSocket(I->Socket,I->EchoEnabled);
+
+                        S->AC.ParmLoadEnabled = 0;
+                        S->AC.ParmDumpEnabled = 0;
+                     }
+                     else {
+                        WriteToSocket(I->Socket,I->Prefix,I->Nprefix,I->EchoEnabled);
+                        ReadFromSocket(I->Socket,I->EchoEnabled);
+                     }
+                  }
+               }
+               #else
+                  AcFsw(&S->AC);
+               #endif
+               break;
+            #ifdef _ENABLE_RBT_
+               case RBT_FSW:
+                  RbtFSW(S);
+                  break;
+            #endif
+         }
+         
       }
-
-
+      
+      MapCmdsToActuators(S);
 }
 
 /* #ifdef __cplusplus

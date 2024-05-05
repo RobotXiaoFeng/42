@@ -24,6 +24,9 @@
    #define GL_GLEXT_PROTOTYPES
    #include <GL/glut.h>
    #include <GL/glu.h>
+   #ifdef _USE_GLFW_
+     #include <GLFW/glfw3.h>
+   #endif
 #elif defined __MINGW32__
    #define GLEW_BUILD
    #include "glew.h"
@@ -46,6 +49,9 @@
    #include <OpenGL/gl.h>
    #include <OpenGL/glu.h>
    #include <GLUT/glut.h>
+   #ifdef _USE_GLFW_
+     #include <GLFW/glfw3.h>
+   #endif
    /* #include <CGDirectDisplay.h> */ /* For CGDisplayHideCursor */
 #else
    #error "Yo!  I don't know where to look for glut.h!"
@@ -97,13 +103,15 @@ EXTERN GLuint Font8x11Offset;
 EXTERN struct HexType Hex[20];
 EXTERN struct PentType Pent[12];
 EXTERN double CosVis[4], SinVis[4];
+EXTERN GLuint SunVtxShader,SunFragShader,SunShaderProgram;
 EXTERN GLuint WorldVtxShader,WorldFragShader,WorldShaderProgram;
 EXTERN GLuint RingVtxShader,RingFragShader,RingShaderProgram;
 EXTERN GLuint AtmoVtxShader,AtmoFragShader,AtmoShaderProgram;
 EXTERN GLuint MapVtxShader,MapFragShader,MapShaderProgram;
 EXTERN GLuint BodyVtxShader,BodyFragShader,BodyShaderProgram;
 EXTERN GLuint MoonMapFragShader,MoonMapShaderProgram;
-
+EXTERN GLuint AlbedoVtxShader,AlbedoFragShader,AlbedoShaderProgram;
+EXTERN GLuint TexReduceVtxShader,TexReduceFragShader,TexReduceShaderProgram;
 
 void DrawBitmapString(void *font, const char *string);
 void DrawStrokeString(void *font, const char *string);
@@ -116,8 +124,9 @@ void DrawSkyGrid(GLfloat MajColor[4], GLfloat MinColor[4], double C[3][3],
 void LoadSkyGrid(double MajGrid, double MinGrid, double SkyDistance,
                  GLuint *MajList, GLuint *MinList);
 void DrawNearFOV(long Nv,double Width,double Height,double Length,
-   long Type,GLfloat Color[4]);
-void DrawFarFOV(long Nv,double Width,double Height,long Type,GLfloat Color[4],
+   long BoreAxis, long H_Axis, long V_Axis, long Type,GLfloat Color[4]);
+void DrawFarFOV(long Nv,double Width,double Height, 
+   long BoreAxis, long H_Axis, long V_Axis, long Type, GLfloat Color[4],
                 const char Label[40], double SkyDistance);
 void RotateL2R(double C[3][3]);
 void RotateR2L(double C[3][3]);
@@ -150,11 +159,6 @@ void DrawEgret(double LineOfSight[3],double BuckyPf[32][3],
                GLuint EgretSourceList[32]);
 void DrawPulsars(double LineOfSight[3],double BuckyPf[32][3],
                GLuint PulsarList[32]);
-void LoadSunTextures(GLfloat SunDiskColor[3], GLfloat SunlightColor[3],
-                     GLuint *SunTexTag,GLuint *SunlightTexTag,
-                     GLuint *SunlightRingTexTag);
-void DrawSun(double LoS[3], double SunRad, double rh[3],
-             GLfloat SunDiskColor[3],GLuint SunTexTag);
 GLuint LoadMilkyWay(const char *PathName,const char *FileName, double CGH[3][3],
    double SkyDistance, double AlphaMask[4]);
 GLuint LoadSkyCube(const char *PathName,const char *FileName, double CGH[3][3],
@@ -171,12 +175,6 @@ void LoadPulsars(const char *FileName,double BuckyPf[32][3],
 void DrawUnitCubeSphere(long Ndiv);
 void DrawSkySphere(long Ndiv);
 void DrawUnitMercatorSphere(GLuint Nlat, GLuint Nlng);
-void DrawWorld(double LoS[3],double rad,double drn[3],double CWN[3][3],
-         double svn[3],long HasRing,long HasAtmo,GLfloat WorldColor[4],
-         GLuint TexTag,GLuint ColCubeTag, GLuint BumpCubeTag,
-         GLuint CloudGlossCubeTag, GLuint RingTexTag,
-         GLuint SphereList, GLuint RingList);
-void DrawRing(GLfloat InRad, GLfloat OutRad, GLuint Nring, GLuint Nslice);
 void DrawBullseye(GLfloat Color[4],double p[4]);
 void DrawArrowhead(double v[3],double scale);
 void DrawVector(double v[3], const char Label[8], const char Units[8],
@@ -193,6 +191,11 @@ void DrawRollPitchYaw(long xc, long yc, long PixScale,
    double RollCmd, double PitchCmd, double YawCmd,
    GLfloat GaugeColor[4], GLfloat BarColor[4]);
 void DrawSmallCircle(double lngc, double latc, double rad);
+void DrawMercatorGrid(double CVA[3][3]);
+void DrawMercatorLine(double lngA, double latA, double lngB, double latB);
+void DrawMercatorSquare(double CCV[3][3], double FOV[2]);
+void DrawMercatorVector(double lng, double lat, char *label);
+void DrawMercatorAxes(double CAV[3][3], char *label);
 void CheckOpenGLProperties(void);
 void HammerProjection(double Lng, double Lat, double *x, double *y);
 void VecToCube(long N, double p[3], long *f, long *i, long *j);
@@ -217,17 +220,3 @@ void ValidateShaderProgram(GLuint ShaderProgram, const char *Name);
 */
 
 #endif /* __GLKIT_H__ */
-
-
-
-
-
-
-
-
-
-
-
-
-
-

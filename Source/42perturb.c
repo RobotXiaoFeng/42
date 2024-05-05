@@ -75,7 +75,8 @@ long ClipEdgeAgainstPlane(double V1[3],double V2[3],
 void FindUnshadedAreas(struct SCType *S, double DirVecN[3])
 {
       struct SilEdgeType *SilEdge,SwapEdge,*SE;
-      struct SilVtxType *SilVtx,*InVtx;
+      struct SilVtxType *SilVtx;
+      struct SilVtxType *InVtx = NULL;
       struct SilVtxType *ClipVtx;
       struct BodyType *B;
       struct GeomType *G;
@@ -93,6 +94,7 @@ void FindUnshadedAreas(struct SCType *S, double DirVecN[3])
       ClipVtx = (struct SilVtxType *) calloc(1,sizeof(struct SilVtxType));
 
 /* .. Form Silhouette */
+      /* TODO: This handles self-shadowing.  Extend to shadowing by other S/C in same Orb */
       /* Form list of edges */
       SilNe = 0;
       for(Ib=0;Ib<S->Nb;Ib++) {
@@ -211,8 +213,11 @@ void FindUnshadedAreas(struct SCType *S, double DirVecN[3])
                }
 
                /* Clip Silhouette against Poly */
-               InVtx = (struct SilVtxType *) calloc(SilNv,sizeof(struct SilVtxType));
-               memcpy(InVtx,SilVtx,SilNv*sizeof(struct SilVtxType));
+               if (SilNv > 0) {
+                  free(InVtx);
+                  InVtx = (struct SilVtxType *) calloc(SilNv,sizeof(struct SilVtxType));
+                  memcpy(InVtx,SilVtx,SilNv*sizeof(struct SilVtxType));
+               }
                SilNin = SilNv;
                for(Iv=0;Iv<3;Iv++) {
                   if (SilNin > 2) {
@@ -242,9 +247,11 @@ void FindUnshadedAreas(struct SCType *S, double DirVecN[3])
                            }
                         }
                      }
-                     free(InVtx);
-                     InVtx = (struct SilVtxType *) calloc(SilNc,sizeof(struct SilVtxType));
-                     memcpy(InVtx,ClipVtx,SilNc*sizeof(struct SilVtxType));
+                     if (SilNc > 0) {
+                        free(InVtx);
+                        InVtx = (struct SilVtxType *) calloc(SilNc,sizeof(struct SilVtxType));
+                        memcpy(InVtx,ClipVtx,SilNc*sizeof(struct SilVtxType));
+                     }
                      SilNin = SilNc;
                   }
                }
@@ -316,6 +323,7 @@ void GravGradFrcTrq(struct SCType *S)
       struct OrbitType *O;
       struct WorldType *W;
       double GravGradN[3][3],CGG[3][3],GravGradB[3][3],GGxI[3],GGxpn[3];
+      double FrcN[3],FrcB[3];
 
       O = &Orb[S->RefOrb];
       
@@ -344,8 +352,11 @@ void GravGradFrcTrq(struct SCType *S)
 
                /* GG force */
                MxV(GravGradN,B->pn,GGxpn);
+               for(i=0;i<3;i++) FrcN[i] = B->mass*GGxpn[i];
+               MxV(B->CN,FrcN,FrcB);
                for(i=0;i<3;i++) {
-                  B->Frc[i] += B->mass*GGxpn[i];
+                  B->FrcN[i] += FrcN[i];
+                  B->FrcB[i] += FrcB[i];
                }
             }
          }
@@ -374,8 +385,11 @@ void GravGradFrcTrq(struct SCType *S)
                /* GG force from Hughes, p. 246, eq. (56) */
                for(i=0;i<3;i++) c[i] = B->mass*B->pn[i];
                rhatoc = VoV(rhat,c);
+               for(i=0;i<3;i++) FrcN[i] = -Coef*(c[i]-3.0*rhat[i]*rhatoc);
+               MxV(B->CN,FrcN,FrcB);
                for(i=0;i<3;i++) {
-                  B->Frc[i] -= Coef*(c[i]-3.0*rhat[i]*rhatoc);
+                  B->FrcN[i] += FrcN[i];
+                  B->FrcB[i] += FrcB[i];
                }
             }
          }
@@ -398,7 +412,7 @@ void ThirdBodyGravForce(double p[3],double s[3],double mu, double mass,
 void GravPertForce(struct SCType *S)
 {
       struct OrbitType *O;
-      double FgeoN[3],ph[3],p[3],s[3],Frc[3];
+      double FgeoN[3],ph[3],p[3],s[3],FrcN[3];
       long Iw,Im,j;
       long OrbCenter,SecCenter;
 
@@ -416,12 +430,12 @@ void GravPertForce(struct SCType *S)
       for(Iw=SOL;Iw<=PLUTO;Iw++) {
          if (World[Iw].Exists && !(Iw == OrbCenter || Iw == SecCenter)) {
             for(j=0;j<3;j++)
-               ph[j] = World[Iw].eph.PosN[j]
-                      -World[OrbCenter].eph.PosN[j];
+               ph[j] = World[Iw].PosH[j]
+                      -World[OrbCenter].PosH[j];
             MxV(World[OrbCenter].CNH,ph,p);
             for(j=0;j<3;j++) s[j] = p[j]-S->PosN[j];
-            ThirdBodyGravForce(p,s,World[Iw].mu,S->mass,Frc);
-            for(j=0;j<3;j++) S->Frc[j] += Frc[j];
+            ThirdBodyGravForce(p,s,World[Iw].mu,S->mass,FrcN);
+            for(j=0;j<3;j++) S->FrcN[j] += FrcN[j];
          }
       }
       /* Moons of OrbCenter (but not SecCenter) */
@@ -433,8 +447,8 @@ void GravPertForce(struct SCType *S)
                   p[j] = World[Iw].eph.PosN[j];
                   s[j] = p[j]-S->PosN[j];
                }
-               ThirdBodyGravForce(p,s,World[Iw].mu,S->mass,Frc);
-               for(j=0;j<3;j++) S->Frc[j] += Frc[j];
+               ThirdBodyGravForce(p,s,World[Iw].mu,S->mass,FrcN);
+               for(j=0;j<3;j++) S->FrcN[j] += FrcN[j];
             }
          }
       }
@@ -449,8 +463,8 @@ void GravPertForce(struct SCType *S)
                p[j] += World[SecCenter].eph.PosN[j];
                s[j] = p[j]-S->PosN[j];
             }
-            ThirdBodyGravForce(p,s,World[Iw].mu,S->mass,Frc);
-            for(j=0;j<3;j++) S->Frc[j] += Frc[j];
+            ThirdBodyGravForce(p,s,World[Iw].mu,S->mass,FrcN);
+            for(j=0;j<3;j++) S->FrcN[j] += FrcN[j];
          }
       }
 
@@ -458,17 +472,17 @@ void GravPertForce(struct SCType *S)
       if (OrbCenter == EARTH) {
          EGM96(ModelPath,EarthGravModel.N,EarthGravModel.M,S->mass,S->PosN,
                World[EARTH].PriMerAng,FgeoN);
-         for(j=0;j<3;j++) S->Frc[j] += FgeoN[j];
+         for(j=0;j<3;j++) S->FrcN[j] += FgeoN[j];
       }
       else if (OrbCenter == MARS) {
          GMM2B(ModelPath,MarsGravModel.N,MarsGravModel.M,S->mass,S->PosN,
                World[MARS].PriMerAng,FgeoN);
-         for(j=0;j<3;j++) S->Frc[j] += FgeoN[j];
+         for(j=0;j<3;j++) S->FrcN[j] += FgeoN[j];
       }
       else if (OrbCenter == LUNA) {
          GLGM2(ModelPath,LunaGravModel.N,LunaGravModel.M,S->mass,S->PosN,
                World[LUNA].PriMerAng,FgeoN);
-         for(j=0;j<3;j++) S->Frc[j] += FgeoN[j];
+         for(j=0;j<3;j++) S->FrcN[j] += FgeoN[j];
       }
       /* else if O->CenterType == MINORBODY, use provided gravity model */
 }
@@ -512,7 +526,7 @@ void AeroFrcTrq(struct SCType *S)
          G = &Geom[B->GeomTag];
          for(Ipoly=0;Ipoly<G->Npoly;Ipoly++) {
             P = &G->Poly[Ipoly];
-            if (strcmp(Matl[P->Matl].Label,"INTERIOR")) { /* Aero doesn't see interior polys */
+               if (strncmp(Matl[P->Matl].Label,"SHADED",6)) { /* Aero doesn't see shaded polys */
                WoN = VoV(VrelB,P->Norm);
                if (WoN > 0.0) {
                   PolyArea = WoN*P->UnshadedArea;
@@ -529,7 +543,10 @@ void AeroFrcTrq(struct SCType *S)
                *WindSpeed*WindSpeed*Area;
          for(i=0;i<3;i++) Fb[i] = Coef*VrelB[i];
          MTxV(B->CN,Fb,Fn);
-         for(i=0;i<3;i++) B->Frc[i] += Fn[i];
+         for(i=0;i<3;i++) {
+            B->FrcN[i] += Fn[i];
+            B->FrcB[i] += Fb[i];
+         }
          VxV(cp,Fb,Trq);
          for(i=0;i<3;i++) B->Trq[i] += Trq[i];
       }
@@ -562,7 +579,7 @@ void SolPressFrcTrq(struct SCType *S)
             /* Find force and torque on each illuminated polygon */
             for(Ipoly=0;Ipoly<G->Npoly;Ipoly++) {
                P = &G->Poly[Ipoly];
-               if (strcmp(Matl[P->Matl].Label,"INTERIOR")) { /* SRP doesn't see interior polys */
+               if (strncmp(Matl[P->Matl].Label,"SHADED",6)) { /* SRP doesn't see shaded polys */
                   MxV(B->CN,S->svn,svb);
                   SoN = VoV(svb,P->Norm);
                   if (SoN > 0.0) {
@@ -576,7 +593,8 @@ void SolPressFrcTrq(struct SCType *S)
                      VxV(r,Fb,Tb);
                      MTxV(B->CN,Fb,Fn);
                      for(i=0;i<3;i++) {
-                        B->Frc[i] += Fn[i];
+                        B->FrcN[i] += Fn[i];
+                        B->FrcB[i] += Fb[i];
                         B->Trq[i] += Tb[i];
                      }
                   }
@@ -587,71 +605,17 @@ void SolPressFrcTrq(struct SCType *S)
 
 }
 /**********************************************************************/
-/*  Static and dynamic imbalance may have any relative phasing.       */
-/*  This model makes the dynamic imbalance torque be in phase         */
-/*  with the torque due to static imbalance.                          */
-void RwaImbalance(struct SCType *S)
+void ResidualDipoleTrq(struct SCType *S)
 {
       struct BodyType *B;
-      struct WhlType *W;
-      struct FlexNodeType *FN;
-      double c,s,Coef,PosB[3],Fb[3],Fn[3],Tb[3],PoA;
-      long Iw,i;
-      double SincFactor;
+      double bvb[3],Trq[3];
+      long Ib,i;
 
-      B = &S->B[0];
-
-      for(Iw=0;Iw<S->Nw;Iw++) {
-         W = &S->Whl[Iw];
-         if (S->FlexActive) {
-            FN = &B->FlexNode[W->FlexNode];
-         }
-         c = cos(W->ang);
-         s = sin(W->ang);
-
-         /* Position of Wheel wrt cm of Body */
-         if (S->FlexActive) {
-            for(i=0;i<3;i++) PosB[i] = FN->PosB[i] - B->cm[i];
-         }
-         else {
-            for(i=0;i<3;i++) PosB[i] = 0.0;
-         }
-
-         /* Averages wheel angle over relatively long DTSIM */
-         SincFactor = sinc(0.5*W->w*DTSIM);
-
-         /* Static Imbalance Force */
-         Coef = W->Ks*W->w*W->w*SincFactor;
-         for(i=0;i<3;i++) {
-            Fb[i] = Coef*(c*W->Uhat[i] + s*W->Vhat[i]);
-         }
-         MTxV(B->CN,Fb,Fn);
-         VxV(PosB,Fb,Tb);
-         for(i=0;i<3;i++) {
-            B->Frc[i] += Fn[i];
-            B->Trq[i] += Tb[i];
-         }
-         if (S->FlexActive) {
-            for(i=0;i<3;i++) {
-               FN->Frc[i] += Fb[i];
-               FN->Trq[i] += Tb[i];
-            }
-         }
-
-         /* Dynamic Imbalance Torque */
-         Coef = W->Kd*W->w*W->w*SincFactor;
-         /* This sign makes sure dyn imbalance trq is in phase with */
-         /* trq from static imbalance */
-         PoA = (VoV(PosB,W->A) > 0.0 ? 1.0 : -1.0);
-         for(i=0;i<3;i++) {
-            Tb[i] = Coef*PoA*(-s*W->Uhat[i]+c*W->Vhat[i]);
-            B->Trq[i] += Tb[i];
-         }
-         if (S->FlexActive) {
-            for(i=0;i<3;i++) {
-               FN->Trq[i] += Tb[i];
-            }
-         }
+      for(Ib=0;Ib<S->Nb;Ib++) {
+         B = &S->B[Ib];
+         MxV(B->CN,S->bvn,bvb);
+         VxV(B->EmbeddedDipole,bvb,Trq);
+         for(i=0;i<3;i++) B->Trq[i] += Trq[i];
       }
 }
 /**********************************************************************/
@@ -689,15 +653,14 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
       struct BodyType *B;
       struct PolyType *Pb,*Pr;
       struct EdgeType *E;
-      double FrcN[3] = {0.0,0.0,0.0};
-      double TrqB[3] = {0.0,0.0,0.0};
+      double FrcN[3],FrcB[3],TrqB[3];
       double rb[3],wxrb[3];
       double prn[3],vrn[3],pbrn[3],vbrn[3],CPR[3][3],CPN[3][3];
       double PosP[3],VelP[3];
       double FrcP[3];
       double ContactArea;
       double Dist,MinDist;
-      double PosR[3],VelR[3],RelPosR[3];
+      double PosR[3],VelR[3],RelPosR[3],PosRR[3];
       static long HitPoly = 0;
       long OtherPoly;
       long Ib,Ie,i,Done;
@@ -709,6 +672,7 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
 
       for(i=0;i<3;i++) {
          FrcN[i] = 0.0;
+         FrcB[i] = 0.0;
          TrqB[i] = 0.0;
       }
 
@@ -718,12 +682,13 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
          /* Use Centroid for proximity */
          /* Find position and velocity of Centroid wrt origin of R */
          FindPosVelR(S,B,Pb->Centroid,PosR,VelR);
+         MxV(R->CN,PosR,PosRR);
 
          /* Find poly (Pr) in Gr closest to Pb */
          Done = 0;
          while(!Done) {
             Done = 1;
-            for(i=0;i<3;i++) RelPosR[i] = PosR[i] - Gr->Poly[HitPoly].Centroid[i];
+            for(i=0;i<3;i++) RelPosR[i] = PosRR[i] - Gr->Poly[HitPoly].Centroid[i];
             MinDist = MAGV(RelPosR);
             /* Check neighboring polys */
             for(Ie=0;Ie<3;Ie++) {
@@ -731,7 +696,7 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
                if (E->Poly1 >= 0 && E->Poly2 >= 0) { /* Screen edges of region */
                   OtherPoly = (E->Poly1 == HitPoly ? E->Poly2 : E->Poly1);
                   for(i=0;i<3;i++)
-                     RelPosR[i] = PosR[i] - Gr->Poly[OtherPoly].Centroid[i];
+                     RelPosR[i] = PosRR[i] - Gr->Poly[OtherPoly].Centroid[i];
                   Dist = MAGV(RelPosR);
                   if (Dist < MinDist) {
                      MinDist = Dist;
@@ -761,7 +726,6 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
          MxV(CPN,vbrn,VelP);
 
          /* Find contact force */
-         /* printf("Body %ld Poly %ld h = %lf\n",Ibody,Ib,h); */
          FrcP[2] = 0.0;
          FrcP[0] = 0.0;
          FrcP[1] = 0.0;
@@ -773,7 +737,8 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
                FrcP[1] = 0.0;
             }
             else {
-               FrcP[2] = -(R->ElastCoef*PosP[2] + R->DampCoef*VelP[2])*Pb->Area;
+               ContactArea = (1.0-PosP[2]/Pb->radius)*Pb->Area;
+               FrcP[2] = -(R->ElastCoef*PosP[2] + R->DampCoef*VelP[2])*ContactArea;
                FrcP[0] = -R->FricCoef*FrcP[2]*VelP[0];
                FrcP[1] = -R->FricCoef*FrcP[2]*VelP[1];
             }
@@ -786,12 +751,14 @@ void BodyRgnContactFrcTrq(struct SCType *S, long Ibody,
          VxV(rb,Fb,Tb);
          for(i=0;i<3;i++) {
             FrcN[i] += Fn[i];
+            FrcB[i] += Fb[i];
             TrqB[i] += Tb[i];
          }
       }
 
       for(i=0;i<3;i++) {
-         B->Frc[i] += FrcN[i];
+         B->FrcN[i] += FrcN[i];
+         B->FrcB[i] += FrcB[i];
          B->Trq[i] += TrqB[i];
       }
 }
@@ -812,6 +779,7 @@ void BodyBodyContactFrcTrq(struct SCType *Sa, long Ibody,
       double FrcN[3] = {0.0,0.0,0.0};
       double TrqA[3] = {0.0,0.0,0.0};
       double TrqB[3] = {0.0,0.0,0.0};
+      double FrcA[3],FrcB[3];
       long Ia,Ib,i;
       double Fn[3],Fa[3],Ta[3],Fb[3],Tb[3];
       double hbar,r2,v2,dx[3],dv[3],r,v;
@@ -928,12 +896,17 @@ void BodyBodyContactFrcTrq(struct SCType *Sa, long Ibody,
          }
       }
 
+      MxV(Ba->CN,FrcN,FrcA);
+      MxV(Bb->CN,FrcN,FrcB);
       for(i=0;i<3;i++) {
-         Ba->Frc[i] += FrcN[i];
+         Ba->FrcN[i] += FrcN[i];
+         Ba->FrcB[i] += FrcA[i];
          Ba->Trq[i] += TrqA[i];
-         Bb->Frc[i] -= FrcN[i];
+         Bb->FrcN[i] -= FrcN[i];
+         Bb->FrcB[i] += FrcB[i];
          Bb->Trq[i] -= TrqB[i];
       }
+      
 }
 /**********************************************************************/
 void ContactFrcTrq(struct SCType *S)
@@ -964,11 +937,11 @@ void ContactFrcTrq(struct SCType *S)
       }
 
 /* .. Contact with other S/C */
-      for(Isc=S->Tag+1;Isc<Nsc;Isc++) {
+      for(Isc=S->ID+1;Isc<Nsc;Isc++) {
          Sc = &SC[Isc];
          /* Cheap S/Sc proximity checks */
          if (!Sc->Exists) continue;
-         if (Sc->Tag == S->Tag) continue;
+         if (Sc->ID == S->ID) continue;
          if (Orb[Sc->RefOrb].World != O->World) continue;
          for(i=0;i<3;i++) dx[i] = S->PosN[i] - Sc->PosN[i];
          if (MAGV(dx) > 1.2*(S->BBox.radius + Sc->BBox.radius)) continue;
@@ -1012,7 +985,7 @@ void EnvTrq(struct SCType *S)
 
       if (E->First) {
          E->First = 0;
-         sprintf(envfilename,"EnvTrq%02li.42",S->Tag);
+         sprintf(envfilename,"EnvTrq%02ld.42",S->ID);
          E->envfile = FileOpen(InOutPath,envfilename,"w");
       }
 
@@ -1031,7 +1004,7 @@ void EnvTrq(struct SCType *S)
 
       for(Ib=0;Ib<S->Nb;Ib++) {
          MTxV(S->B[Ib].CN,S->B[Ib].Trq,TrqN);
-         VxV(S->B[Ib].pn,S->B[Ib].Frc,rxF);
+         VxV(S->B[Ib].pn,S->B[Ib].FrcN,rxF);
          for(i=0;i<3;i++) SumTrqN[i] += TrqN[i] + rxF[i];
       }
       MxV(CSN,SumTrqN,TrqS);
@@ -1071,9 +1044,9 @@ void Perturbations(struct SCType *S)
 
 /* .. Solar Radiation Pressure Forces and Torques */
       if (SolPressActive) SolPressFrcTrq(S);
-
-/* .. Reaction Wheel Static and Dynamic Imbalance Torques */
-      if (RwaImbalanceActive) RwaImbalance(S);
+      
+/* .. Embedded Magnetic Dipole Torque */
+      if (ResidualDipoleActive) ResidualDipoleTrq(S);
 
 /* .. Contact Forces and Torques */
       if (ContactActive) ContactFrcTrq(S);
@@ -1081,11 +1054,8 @@ void Perturbations(struct SCType *S)
 /* .. CFD Slosh Forces and Torques */
       #ifdef _ENABLE_CFD_SLOSH_
          if (SloshActive)
-            #ifdef _ENABLE_SOCKETS_
-               CfdSlosh(S);
-            #else
-               FakeCfdSlosh(S);
-            #endif
+            CfdSlosh(S);
+            /* FakeCfdSlosh(S); */
       #endif
 
 /* .. Find Momentum Accumulation for Actuator Sizing */

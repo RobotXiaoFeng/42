@@ -1,8 +1,9 @@
 <<<<<<<<<<<<<<<<<  42: The Mostly Harmless Simulator  >>>>>>>>>>>>>>>>>
 ************************** Simulation Control **************************
 REAL                            !  Time Mode (FAST, REAL, or EXTERNAL)
-86400.0     1.0                 !  Sim Duration, Step Size [sec]
+86400.0     0.1                 !  Sim Duration, Step Size [sec]
 1.0                             !  File Output Interval [sec]
+0                               !  RNG Seed
 TRUE                            !  Graphics Front End?
 Inp_Cmd.txt                     !  Command Script File Name
 **************************  Reference Orbits  **************************
@@ -12,10 +13,10 @@ TRUE   Orb_LEO.txt              !  Input file name for Orb 0
 1                               !  Number of Spacecraft
 TRUE  0 SC_Simple.txt           !  Existence, RefOrb, Input file for SC 0
 ***************************** Environment  *****************************
-06 21 2014                      !  Date (Month, Day, Year)
-00 00 00.00                     !  Greenwich Mean Time (Hr,Min,Sec)
-0.0                             !  Time Offset (sec)
-USER_DEFINED                    !  Model Date Interpolation for Solar Flux and AP values?(TWOSIGMA_KP, NOMINAL or USER_DEFINED)
+06 23 2014                      !  Date (UTC) (Month, Day, Year)
+00 00 00.00                     !  Time (UTC) (Hr,Min,Sec)
+0.0                             !  Leap Seconds (sec)
+USER                            !  F10.7, Ap (USER, NOMINAL or TWOSIGMA)
 230.0                           !  If USER_DEFINED, enter desired F10.7 value
 100.0                           !  If USER_DEFINED, enter desired AP value
 IGRF                            !  Magfield (NONE,DIPOLE,IGRF)
@@ -26,14 +27,15 @@ IGRF                            !  Magfield (NONE,DIPOLE,IGRF)
 FALSE   FALSE                   !  Aerodynamic Forces & Torques (Shadows)
 FALSE                           !  Gravity Gradient Torques
 FALSE   FALSE                   !  Solar Pressure Forces & Torques (Shadows)
+FALSE                           !  Residual Magnetic Moment Torques
 FALSE                           !  Gravity Perturbation Forces
-FALSE                           !  Passive Joint Forces & Torques
 FALSE                           !  Thruster Plume Forces & Torques
-FALSE                           !  RWA Imbalance Forces and Torques
 FALSE                           !  Contact Forces and Torques
 FALSE                           !  CFD Slosh Forces and Torques
+FALSE                           !  Albedo Effect on CSS Measurements
 FALSE                           !  Output Environmental Torques to Files
 ********************* Celestial Bodies of Interest *********************
+MEAN                            !  Ephem Option (MEAN or DE430)
 TRUE                            !  Mercury
 TRUE                            !  Venus
 TRUE                            !  Earth and Luna
